@@ -60,7 +60,7 @@ pipeline {
                     docker rm -f py-app || true
                     docker rmi -f flask-vault-app:latest || true
                     docker build -t flask-vault-app:latest .
-                    docker run -d -p 8005:5000 -e API_KEY=$APP1 --name py-app flask-vault-app:latest
+                    docker run -d -p 8006:5000 -e API_KEY=$APP1 --name py-app flask-vault-app:latest
                     '''
                     }
                 }
