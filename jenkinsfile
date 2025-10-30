@@ -1,73 +1,67 @@
 pipeline {
-    agent { label 'akhil-security-agent' }
+    agent {
+        label 'akhil-security-agent'
+    }
 
     environment {
         VAULT_ADDR = 'http://34.228.140.38:8400/'
     }
 
     stages {
-        stage('Cleanup Workspace') {
+        stage('Cleanup') {
             steps {
                 cleanWs()
             }
         }
-
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
-
         stage('GitLeaks Scan') {
             steps {
                 sh '''#!/bin/bash
                     set -eux
+                    # Install gitleaks if not present
                     if ! command -v gitleaks &> /dev/null; then
+                        echo "Installing Gitleaks..."
                         wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
                         tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
                         chmod +x gitleaks
                         sudo mv gitleaks /usr/local/bin/
                     fi
+                    # Run gitleaks detect even if from non commited codes
 
-                    exit_code=0
-                    if ! gitleaks detect --source . --no-git --verbose --report-path gitleaks-report.json; then
-                        exit_code=$?
-                    fi
 
-                    if [ "$exit_code" -ne 0 ]; then
-                        echo "❌ Gitleaks scan failed"
-                        exit 1
-                    else
-                        echo "✅ No leaks found"
-                    fi
+                    echo "🔍 Running Gitleaks scan..."
+                    set +e  # temporarily disable fail-fast
+                    gitleaks detect --source python_app --no-git --verbose --report-path gitleaks-report.json 
+                    result=$?  # capture exit status
+                    set -e  # re-enable fail-fast
+
+                if [ "$result" -ne 0 ]; then
+                    echo "❌ Gitleaks found leaks (exit code $result)"
+                    exit 1
+                else
+                    echo "✅ No leaks found."
+                fi
                 '''
             }
         }
-
-        stage('Build & Run') {
+        stage('Fetch Secret from Vault') {
             steps {
                 script {
                     withVault([vaultSecrets: [
-                        [path: 'secret/app_secret', secretValues: [[envVar: 'APP1', vaultKey: 'app1']]]
+                        [path: 'secret/app_secret', secretValues: [[envVar: 'APP1', vaultKey: 'app1']
+                        ]]
                     ]]) {
-                        sh '''#!/bin/bash
-                            set -eux
 
-                            if [ ! -f Dockerfile ]; then
-                                echo "❌ Dockerfile not found"
-                                exit 1
-                            fi
-
-                            docker build -t flask-vault-app .
-
-                            existing_container=$(docker ps -q --filter "publish=8005" || true)
-                            if [ -n "$existing_container" ]; then
-                                docker stop $existing_container || true
-                                docker rm $existing_container || true
-                            fi
-
-                            docker run -d -p 8005:5000 -e API_KEY=$APP1 flask-vault-app
-                        '''
+                    sh '''
+                    docker rm -f py-app || true
+                    docker rmi -f flask-vault-app:latest || true
+                    docker build -t flask-vault-app:latest .
+                    docker run -d -p 8005:5000 -e API_KEY=$APP1 --name py-app flask-vault-app:latest
+                    '''
                     }
                 }
             }
@@ -76,10 +70,10 @@ pipeline {
 
     post {
         success {
-            echo '✅ Pipeline completed successfully!'
+            echo 'Pipeline completed successfully!'
         }
         failure {
-            echo '❌ Pipeline failed.'
+            echo 'Pipeline failed.'
         }
     }
 }
