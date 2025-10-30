@@ -1,7 +1,5 @@
 pipeline {
-    agent {
-        label 'akhil-security-agent'
-    }
+    agent { label 'akhil-security-agent' }
 
     environment {
         VAULT_ADDR = 'http://34.228.140.38:8400/'
@@ -10,80 +8,64 @@ pipeline {
     stages {
         stage('Cleanup Workspace') {
             steps {
-                echo 'Cleaning workspace...'
                 cleanWs()
             }
         }
 
         stage('Checkout') {
             steps {
-                echo 'Checking out source code...'
                 checkout scm
             }
         }
 
         stage('GitLeaks Scan') {
             steps {
-                echo 'Running Gitleaks scan...'
                 sh '''#!/bin/bash
                     set -eux
-                    # Install gitleaks if not present
                     if ! command -v gitleaks &> /dev/null; then
-                        echo "Installing Gitleaks..."
                         wget https://github.com/zricethezav/gitleaks/releases/download/v8.18.1/gitleaks_8.18.1_linux_x64.tar.gz
                         tar -xzf gitleaks_8.18.1_linux_x64.tar.gz
                         chmod +x gitleaks
                         sudo mv gitleaks /usr/local/bin/
                     fi
 
-                    # Initialize exit_code to prevent unbound variable errors
                     exit_code=0
-
-                    # Run gitleaks detect (even for uncommitted code)
                     if ! gitleaks detect --source . --no-git --verbose --report-path gitleaks-report.json; then
                         exit_code=$?
                     fi
 
                     if [ "$exit_code" -ne 0 ]; then
-                        echo "❌ Gitleaks found leaks (exit code $exit_code)"
+                        echo "❌ Gitleaks scan failed"
                         exit 1
                     else
-                        echo "✅ No leaks found."
+                        echo "✅ No leaks found"
                     fi
                 '''
             }
         }
 
-        stage('Fetch Secret from Vault and Build') {
+        stage('Build & Run') {
             steps {
-                echo 'Fetching secrets from Vault and building Docker image...'
                 script {
                     withVault([vaultSecrets: [
                         [path: 'secret/app_secret', secretValues: [[envVar: 'APP1', vaultKey: 'app1']]]
                     ]]) {
                         sh '''#!/bin/bash
                             set -eux
-                            
-                            echo "Listing files to confirm Dockerfile presence..."
-                            ls -lah
+
                             if [ ! -f Dockerfile ]; then
-                                echo "❌ Dockerfile not found in the current directory!"
+                                echo "❌ Dockerfile not found"
                                 exit 1
                             fi
 
-                            echo "✅ Building Docker image..."
                             docker build -t flask-vault-app .
 
-                            # 🔹 Minimal addition: stop/remove any container using port 8005
-                            echo "🧹 Checking if port 8005 is already in use..."
                             existing_container=$(docker ps -q --filter "publish=8005" || true)
                             if [ -n "$existing_container" ]; then
-                                echo "⚠️ A container is already using port 8005. Stopping it..."
                                 docker stop $existing_container || true
                                 docker rm $existing_container || true
                             fi
 
-                            echo "✅ Running container on port 8005..."
                             docker run -d -p 8005:5000 -e API_KEY=$APP1 flask-vault-app
                         '''
                     }
@@ -98,9 +80,6 @@ pipeline {
         }
         failure {
             echo '❌ Pipeline failed.'
-        }
-        always {
-            echo '🧹 Cleaning up temporary files...'
         }
     }
 }
